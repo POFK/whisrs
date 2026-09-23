@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use std::sync::{OnceLock, RwLock};
 
+use anyhow::Result;
 use tracing::{info, warn};
 
 use crate::transcription::asr_sidecar::AsrSidecarBackend;
@@ -117,6 +119,76 @@ fn asr_sidecar_backend_from(env_key: Option<&str>, config: &Config) -> AsrSideca
     AsrSidecarBackend::new(url, api_key)
 }
 
+/// A constructor for a transcription backend, handed to the daemon through
+/// [`register_backend`]. Receives the loaded config so the backend can read
+/// its own settings section.
+pub type BackendFactory =
+    Box<dyn Fn(&Config) -> Result<Arc<dyn TranscriptionBackend>> + Send + Sync>;
+
+/// External transcription backends, registered by the embedding binary before
+/// the daemon builds its backend from the config. Kept in a process-global
+/// registry (not a parameter) because the daemon's startup path is fixed and
+/// the registration happens exactly once, at process start, before any
+/// `create_backend` call.
+static EXTERNAL_BACKENDS: OnceLock<RwLock<Vec<(String, BackendFactory)>>> = OnceLock::new();
+
+fn external_backends() -> &'static RwLock<Vec<(String, BackendFactory)>> {
+    EXTERNAL_BACKENDS.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+/// Register a transcription backend under `name` so `[general] backend = "<name>"`
+/// selects it.
+///
+/// Built-in backends always win: registering a name one of them uses is a
+/// no-op, so a downstream binary can register a drop-in replacement for a
+/// built-in without changing the daemon's built-in behavior. Register before
+/// the first `whisrs::daemon::run()` call; the daemon builds its backend from
+/// the config at startup.
+///
+/// ```no_run
+/// use std::sync::Arc;
+///
+/// fn main() -> anyhow::Result<()> {
+///     whisrs::register_backend(
+///         "my-backend",
+///         Box::new(|_config| {
+///             // construct and return an Arc<dyn TranscriptionBackend>
+///             unimplemented!()
+///         }),
+///     );
+///     tokio::runtime::Runtime::new()?.block_on(whisrs::daemon::run())
+/// }
+/// ```
+pub fn register_backend(name: &str, factory: BackendFactory) {
+    let mut backends = external_backends()
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+    backends.retain(|(registered, _)| registered != name);
+    backends.push((name.to_string(), factory));
+}
+
+/// The names registered through [`register_backend`], in registration order.
+pub fn registered_backends() -> Vec<String> {
+    external_backends()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Look up an externally registered backend by name, running its factory
+/// against the loaded config.
+fn external_backend(name: &str, config: &Config) -> Option<Result<Arc<dyn TranscriptionBackend>>> {
+    let backends = external_backends()
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    backends
+        .iter()
+        .find(|(registered, _)| registered == name)
+        .map(|(_, factory)| factory(config))
+}
+
 fn sanitize_ws_endpoint_for_log(url: &str) -> String {
     let Ok(mut parsed) = reqwest::Url::parse(url) else {
         return "<invalid ws endpoint>".to_string();
@@ -128,8 +200,14 @@ fn sanitize_ws_endpoint_for_log(url: &str) -> String {
     parsed.to_string()
 }
 
-pub(crate) fn create_backend(config: &Config) -> Arc<dyn TranscriptionBackend> {
-    match config.general.backend.as_str() {
+/// Build the transcription backend selected by `[general] backend`.
+///
+/// Built-in backends are matched first; a name none of them carries is
+/// looked up in the external registry (see [`register_backend`]). A factory
+/// failure is an error, not a fallback: the daemon should start with a clear
+/// message instead of silently transcribing through a different model.
+pub(crate) fn create_backend(config: &Config) -> Result<Arc<dyn TranscriptionBackend>> {
+    let backend: Arc<dyn TranscriptionBackend> = match config.general.backend.as_str() {
         "deepgram" => {
             let api_key = resolve_deepgram_api_key(config).unwrap_or_default();
             if api_key.is_empty() {
@@ -222,7 +300,7 @@ pub(crate) fn create_backend(config: &Config) -> Arc<dyn TranscriptionBackend> {
                     "openai-compatible-realtime backend selected but config section is missing; falling back to groq"
                 );
                 let api_key = resolve_groq_api_key(config).unwrap_or_default();
-                return Arc::new(GroqBackend::new(api_key));
+                return Ok(Arc::new(GroqBackend::new(api_key)));
             };
 
             let endpoint_display = sanitize_ws_endpoint_for_log(&realtime.url);
@@ -249,11 +327,30 @@ pub(crate) fn create_backend(config: &Config) -> Arc<dyn TranscriptionBackend> {
             }
         }
         other => {
+            if let Some(result) = external_backend(other, config) {
+                match result {
+                    Ok(backend) => return Ok(backend),
+                    Err(e) => {
+                        anyhow::bail!(
+                            "failed to initialize external transcription backend '{other}': {e}"
+                        )
+                    }
+                }
+            }
+            let registered = registered_backends();
             warn!("unknown backend '{other}', falling back to groq");
-            let api_key = resolve_groq_api_key(config).unwrap_or_default();
-            Arc::new(GroqBackend::new(api_key))
+            if !registered.is_empty() {
+                warn!(
+                    "registered external backends: {}; register one before whisrs::daemon::run() and select it via [general] backend",
+                    registered.join(", ")
+                );
+            }
+            Arc::new(GroqBackend::new(
+                resolve_groq_api_key(config).unwrap_or_default(),
+            ))
         }
-    }
+    };
+    Ok(backend)
 }
 
 /// The `[local-whisper]` settings [`create_backend`] runs on, including the
@@ -503,6 +600,129 @@ mod tests {
                 "{backend}: the wire model and the model validate inspects disagree"
             );
         }
+    }
+
+    static UNIQUE_TEST_NAMES: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    fn test_transcription_config() -> crate::transcription::TranscriptionConfig {
+        crate::transcription::TranscriptionConfig {
+            language: "auto".to_string(),
+            model: "test".to_string(),
+            prompt: None,
+            keyterms: Vec::new(),
+        }
+    }
+
+    /// A backend that reports which stub it is, so registry tests can tell a
+    /// registered stub apart from a built-in backend of the same name.
+    struct StubBackend {
+        name: String,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::transcription::TranscriptionBackend for StubBackend {
+        async fn transcribe(
+            &self,
+            _audio: &[u8],
+            _config: &crate::transcription::TranscriptionConfig,
+        ) -> anyhow::Result<String> {
+            Ok(self.name.clone())
+        }
+
+        fn sends_prompt(&self, _config: &crate::transcription::TranscriptionConfig) -> bool {
+            false
+        }
+    }
+
+    /// Register a stub under `name`. The registry is process-global and the
+    /// test runner is multi-threaded, so each test registers a unique name
+    /// and asserts on it rather than assuming an empty registry.
+    fn register_stub(name: String) {
+        let stub_name = format!("stub-{name}");
+        register_backend(
+            &name,
+            Box::new(move |_config| {
+                Ok::<_, anyhow::Error>(Arc::new(StubBackend {
+                    name: stub_name.clone(),
+                })
+                    as Arc<dyn crate::transcription::TranscriptionBackend>)
+            }),
+        );
+    }
+
+    #[test]
+    fn registered_backend_is_selected_by_create_backend() {
+        let n = UNIQUE_TEST_NAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("stub-{}-{n}", std::process::id());
+        register_stub(name.clone());
+        let mut config: Config = toml::from_str("").expect("defaults");
+        config.general.backend = name.clone();
+
+        let backend = create_backend(&config).expect("registered backend builds");
+        let text = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(backend.transcribe(&[], &test_transcription_config()))
+            .unwrap();
+        assert_eq!(text, format!("stub-{name}"));
+    }
+
+    #[test]
+    fn built_in_backend_wins_over_a_same_named_registration() {
+        register_stub("groq".to_string());
+        let mut config: Config = toml::from_str("").expect("defaults");
+        config.general.backend = "groq".to_string();
+
+        let backend = create_backend(&config).expect("built-in groq builds");
+        // The built-in GroqBackend answered, not the stub: the registry must
+        // not shadow a built-in name. A stub would have returned its name; a
+        // GroqBackend has no API key here and fails on the network call.
+        let text = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(backend.transcribe(&[], &test_transcription_config()));
+        assert!(text.is_err());
+    }
+
+    #[test]
+    fn unknown_backend_without_registration_falls_back_to_groq() {
+        let mut config: Config = toml::from_str("").expect("defaults");
+        config.general.backend = "no-such-backend".to_string();
+
+        // No registration: the built-in fallback still applies, and the error
+        // is a GroqBackend construction, not a registry miss.
+        assert!(create_backend(&config).is_ok());
+    }
+
+    #[test]
+    fn a_failing_factory_is_an_error_not_a_fallback() {
+        let n = UNIQUE_TEST_NAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("failing-{}-{n}", std::process::id());
+        register_backend(
+            name.as_str(),
+            Box::new(|_config| Err(anyhow::anyhow!("model dir missing"))),
+        );
+        let mut config: Config = toml::from_str("").expect("defaults");
+        config.general.backend = name.clone();
+
+        let Err(err) = create_backend(&config) else {
+            panic!("failing factory must error");
+        };
+        assert!(err.to_string().contains(&name));
+        assert!(err.to_string().contains("model dir missing"));
+    }
+
+    #[test]
+    fn registered_backends_lists_names_in_registration_order() {
+        let a = format!("ord-a-{}", std::process::id());
+        let b = format!("ord-b-{}", std::process::id());
+        register_stub(a.clone());
+        register_stub(b.clone());
+        let names = registered_backends();
+        assert!(names.contains(&a) && names.contains(&b));
+        assert!(
+            names.iter().position(|n| n == &a).unwrap()
+                < names.iter().position(|n| n == &b).unwrap()
+        );
     }
 
     #[test]

@@ -23,7 +23,7 @@ use crate::{encode_message, read_message, socket_path, Command, Response, State}
 mod command_mode;
 mod context;
 mod dictation;
-mod factory;
+pub(crate) mod factory;
 #[cfg(feature = "hooks")]
 mod hooks;
 mod injection;
@@ -75,7 +75,7 @@ pub async fn run() -> Result<()> {
         }
     }
 
-    let backend = create_backend(&config);
+    let backend = create_backend(&config)?;
 
     // Wait for compositor environment on boot (WAYLAND_DISPLAY, etc.).
     // Must run before window tracker detection and any clipboard operations.

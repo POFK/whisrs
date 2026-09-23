@@ -15,6 +15,7 @@ pub mod overlay;
 pub mod service;
 pub mod state;
 pub mod transcription;
+pub use daemon::factory::{register_backend, registered_backends, BackendFactory};
 pub mod tray;
 pub mod tts;
 pub mod window;
