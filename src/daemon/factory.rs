@@ -2,17 +2,17 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use whisrs::transcription::asr_sidecar::AsrSidecarBackend;
-use whisrs::transcription::deepgram::{DeepgramRestBackend, DeepgramStreamingBackend};
-use whisrs::transcription::groq::GroqBackend;
-use whisrs::transcription::local_parakeet::ParakeetBackend;
-use whisrs::transcription::local_vosk::VoskBackend;
-use whisrs::transcription::local_whisper::LocalWhisperBackend;
-use whisrs::transcription::openai_compatible_realtime::OpenAiCompatibleRealtimeBackend;
-use whisrs::transcription::openai_realtime::OpenAIRealtimeBackend;
-use whisrs::transcription::openai_rest::OpenAIRestBackend;
-use whisrs::transcription::TranscriptionBackend;
-use whisrs::{Config, LocalWhisperConfig};
+use crate::transcription::asr_sidecar::AsrSidecarBackend;
+use crate::transcription::deepgram::{DeepgramRestBackend, DeepgramStreamingBackend};
+use crate::transcription::groq::GroqBackend;
+use crate::transcription::local_parakeet::ParakeetBackend;
+use crate::transcription::local_vosk::VoskBackend;
+use crate::transcription::local_whisper::LocalWhisperBackend;
+use crate::transcription::openai_compatible_realtime::OpenAiCompatibleRealtimeBackend;
+use crate::transcription::openai_realtime::OpenAIRealtimeBackend;
+use crate::transcription::openai_rest::OpenAIRestBackend;
+use crate::transcription::TranscriptionBackend;
+use crate::{Config, LocalWhisperConfig};
 
 fn resolve_groq_api_key(config: &Config) -> Option<String> {
     if let Ok(key) = std::env::var("WHISRS_GROQ_API_KEY") {
@@ -326,7 +326,7 @@ mod tests {
             local_whisper: None,
             local_vosk: None,
             local_parakeet: None,
-            asr_sidecar: Some(whisrs::AsrSidecarConfig {
+            asr_sidecar: Some(crate::AsrSidecarConfig {
                 url: "http://127.0.0.1:8765/transcribe".to_string(),
                 model: "microsoft/VibeVoice-ASR-HF".to_string(),
                 api_key: api_key.map(str::to_string),
@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn get_model_for_openai_compatible_realtime_backend() {
         let config = Config {
-            general: whisrs::GeneralConfig {
+            general: crate::GeneralConfig {
                 backend: "openai-compatible-realtime".to_string(),
                 ..Default::default()
             },
@@ -465,7 +465,7 @@ mod tests {
             local_vosk: None,
             local_parakeet: None,
             asr_sidecar: None,
-            openai_compatible_realtime: Some(whisrs::OpenAiCompatibleRealtimeConfig {
+            openai_compatible_realtime: Some(crate::OpenAiCompatibleRealtimeConfig {
                 url: "ws://localhost:1234/realtime".to_string(),
                 model: "Whisper-Tiny".to_string(),
                 profile: "lemonade".to_string(),
@@ -523,7 +523,7 @@ mod tests {
 
         assert_eq!(
             local_whisper_settings(&absent).model_path,
-            whisrs::default_whisper_model_path(),
+            crate::default_whisper_model_path(),
             "absent [local-whisper] resolves to a path validate does not check"
         );
         assert_eq!(

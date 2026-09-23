@@ -2,6 +2,7 @@
 
 pub mod audio;
 pub mod config;
+pub mod daemon;
 pub mod history;
 #[cfg(feature = "hooks")]
 pub mod hooks;

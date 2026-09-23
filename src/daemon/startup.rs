@@ -3,9 +3,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tracing::{debug, error, info, warn};
 
-use whisrs::config::types::{unknown_config_keys, unknown_keys_warning};
-use whisrs::service::ServiceManager;
-use whisrs::Config;
+use crate::config::types::{unknown_config_keys, unknown_keys_warning};
+use crate::service::ServiceManager;
+use crate::Config;
 
 /// Try to connect to an existing socket.
 async fn socket_is_alive(path: &std::path::Path) -> bool {
@@ -29,8 +29,8 @@ pub(crate) async fn cleanup_stale_socket(path: &std::path::Path) -> Result<()> {
 /// parsing fails and defaults are used, so the caller can notify the user.
 pub(crate) fn load_config() -> (Config, Option<String>) {
     load_config_from(
-        &whisrs::config_path(),
-        &whisrs::config::vocabulary::vocabulary_path(),
+        &crate::config_path(),
+        &crate::config::vocabulary::vocabulary_path(),
     )
 }
 
@@ -53,7 +53,7 @@ fn load_config_from(
 /// first. A missing file is the opt-out; an unreadable one is warned about and
 /// ignored, because the daemon still has to start.
 fn merge_vocabulary_file_at(config: &mut Config, path: &std::path::Path) {
-    use whisrs::config::vocabulary::{load_vocabulary_file, merge_vocabulary};
+    use crate::config::vocabulary::{load_vocabulary_file, merge_vocabulary};
 
     match load_vocabulary_file(path) {
         Ok(Some(terms)) if !terms.is_empty() => {
@@ -435,7 +435,7 @@ mod tests {
             "Hyprland".to_string(),
             "NixOS".to_string(),
         ];
-        whisrs::config::vocabulary::write_vocabulary_file(&vocab_path, &migrated)
+        crate::config::vocabulary::write_vocabulary_file(&vocab_path, &migrated)
             .expect("write vocabulary.txt");
 
         let (config, _) = load_config_from(&config_path, &vocab_path);
@@ -500,7 +500,7 @@ mod tests {
         )
         .expect("write config.toml");
         let vocab_path = dir.path().join("vocabulary.txt");
-        whisrs::config::vocabulary::write_vocabulary_file(&vocab_path, &[])
+        crate::config::vocabulary::write_vocabulary_file(&vocab_path, &[])
             .expect("write an empty vocabulary.txt");
 
         let (config, _) = load_config_from(&config_path, &vocab_path);

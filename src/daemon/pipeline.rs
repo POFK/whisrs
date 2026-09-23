@@ -6,23 +6,23 @@ use anyhow::{Context, Result};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
+use crate::audio::capture::{AudioCaptureHandle, SAMPLE_RATE};
+use crate::audio::feedback;
+use crate::history::{self, HistoryEntry};
+use crate::llm;
+use crate::state::Action;
+use crate::transcription::{TranscriptionBackend, TranscriptionConfig};
+use crate::window::WindowTracker;
+use crate::{Config, InjectorBackend, State};
 use audio_silence_gate::{audio_gate_reason, AutoStopDetector, SILENCE_RMS_THRESHOLD};
 use filler_remove::FillerFilter;
 use prompt_echo::is_prompt_echo;
-use whisrs::audio::capture::{AudioCaptureHandle, SAMPLE_RATE};
-use whisrs::audio::feedback;
-use whisrs::history::{self, HistoryEntry};
-use whisrs::llm;
-use whisrs::state::Action;
-use whisrs::transcription::{TranscriptionBackend, TranscriptionConfig};
-use whisrs::window::WindowTracker;
-use whisrs::{Config, InjectorBackend, State};
 use xkb_type::ClipboardBackend;
 
-use crate::context::{DaemonContext, DaemonState};
-use crate::factory::get_model_for_backend;
-use crate::injection::{inject_text, is_terminal_class, type_text_at_cursor};
-use crate::notify::{send_notification, truncate_preview};
+use crate::daemon::context::{DaemonContext, DaemonState};
+use crate::daemon::factory::get_model_for_backend;
+use crate::daemon::injection::{inject_text, is_terminal_class, type_text_at_cursor};
+use crate::daemon::notify::{send_notification, truncate_preview};
 
 const TYPING_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -423,8 +423,8 @@ where
 /// accumulated transcript is written to the clipboard once the recording
 /// stops — as a manual-fix fallback for silent injection failures, or as the
 /// only output in copy-only mode (see
-/// [`whisrs::InputConfig::clipboard_fallback`] /
-/// [`whisrs::InputConfig::clipboard_only`]). Skipped when nothing was typed
+/// [`crate::InputConfig::clipboard_fallback`] /
+/// [`crate::InputConfig::clipboard_only`]). Skipped when nothing was typed
 /// — copying an empty string would clobber the user's clipboard for nothing.
 /// "Nothing" is an empty transcript, not an empty typing run: under
 /// `clipboard_only` nothing is ever typed and the copy is still the point.
@@ -605,7 +605,7 @@ pub(crate) async fn transcribe_batch_audio(
     language: &str,
     opts: &BatchOptions<'_>,
 ) -> Result<String> {
-    use whisrs::audio::wav::encode_wav;
+    use crate::audio::wav::encode_wav;
 
     // Skip the API call entirely when the recording is empty, too short, or
     // pure silence. Cloud Whisper variants (whisper-1, gpt-4o-*-transcribe)
@@ -677,7 +677,7 @@ pub(crate) async fn transcribe_batch_audio(
                 let friendly = format_api_error(&e);
                 error!("transcription failed: {friendly}");
                 // Save audio for recovery.
-                use whisrs::audio::recovery;
+                use crate::audio::recovery;
                 match recovery::save_recovery_audio(samples) {
                     Ok(path) => {
                         info!(
@@ -1633,7 +1633,7 @@ mod tests {
     fn context_with_backend(backend: StubBackend) -> DaemonContext {
         DaemonContext {
             config: config_with_vocabulary(&WIRING_VOCABULARY),
-            window_tracker: Arc::new(whisrs::window::NoopTracker),
+            window_tracker: Arc::new(crate::window::NoopTracker),
             transcription_backend: Arc::new(backend),
             notify: false,
             state_tx: tokio::sync::watch::channel(State::Idle).0,

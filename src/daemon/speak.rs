@@ -3,13 +3,13 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use whisrs::state::Action;
-use whisrs::{Response, State};
+use crate::state::Action;
+use crate::{Response, State};
 
-use crate::context::{DaemonContext, DaemonState};
-use crate::factory::resolve_tts_api_key;
-use crate::notify::send_notification;
-use crate::selection::capture_selection;
+use crate::daemon::context::{DaemonContext, DaemonState};
+use crate::daemon::factory::resolve_tts_api_key;
+use crate::daemon::notify::send_notification;
+use crate::daemon::selection::capture_selection;
 
 /// Read the selected text aloud via TTS.
 ///
@@ -72,7 +72,7 @@ pub(crate) async fn handle_speak(
     };
 
     let api_key = resolve_tts_api_key(&context.config);
-    let backend = match whisrs::tts::create_backend(&tts_config, api_key) {
+    let backend = match crate::tts::create_backend(&tts_config, api_key) {
         Ok(b) => b,
         Err(e) => {
             return Response::Error {
@@ -170,7 +170,7 @@ pub(crate) async fn handle_speak(
         let level_tx = context.overlay_level_tx.clone();
         tokio::spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
-                whisrs::audio::playback::play_wav(&wav_bytes, stop, level_tx)
+                crate::audio::playback::play_wav(&wav_bytes, stop, level_tx)
             })
             .await;
             match result {

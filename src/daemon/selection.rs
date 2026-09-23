@@ -4,8 +4,8 @@ use anyhow::Context;
 use tracing::{debug, warn};
 use xkb_type::ClipboardBackend;
 
-use crate::context::DaemonContext;
-use crate::injection::is_terminal_class;
+use crate::daemon::context::DaemonContext;
+use crate::daemon::injection::is_terminal_class;
 
 /// Delay before the simulated copy so briefly-held hotkey modifiers clear
 /// (see [`capture_selection`]).

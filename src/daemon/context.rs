@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use whisrs::audio::capture::AudioCaptureHandle;
-use whisrs::llm;
-use whisrs::state::StateMachine;
-use whisrs::transcription::TranscriptionBackend;
-use whisrs::window::WindowTracker;
-use whisrs::{Config, State};
+use crate::audio::capture::AudioCaptureHandle;
+use crate::llm;
+use crate::state::StateMachine;
+use crate::transcription::TranscriptionBackend;
+use crate::window::WindowTracker;
+use crate::{Config, State};
 
 /// Context saved when command mode starts recording.
 pub(crate) struct CommandModeContext {

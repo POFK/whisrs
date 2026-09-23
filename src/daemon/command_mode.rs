@@ -4,23 +4,23 @@ use anyhow::{Context, Result};
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
+use crate::audio::capture::{AudioCaptureHandle, SAMPLE_RATE};
+use crate::audio::feedback;
+use crate::llm;
+use crate::state::{Action, StateMachine};
+use crate::{Config, Response, State};
 use audio_silence_gate::{AutoStopDetector, SILENCE_RMS_THRESHOLD};
-use whisrs::audio::capture::{AudioCaptureHandle, SAMPLE_RATE};
-use whisrs::audio::feedback;
-use whisrs::llm;
-use whisrs::state::{Action, StateMachine};
-use whisrs::{Config, Response, State};
 
-use crate::context::{CommandModeContext, DaemonContext, DaemonState, LlmCommandContext};
-use crate::injection::{
+use crate::daemon::context::{CommandModeContext, DaemonContext, DaemonState, LlmCommandContext};
+use crate::daemon::injection::{
     clear_line_via_keyboard, inject_text, is_terminal_class, prepare_llm_injection, LlmInjection,
 };
-use crate::notify::{send_notification, truncate_preview};
-use crate::pipeline::{
+use crate::daemon::notify::{send_notification, truncate_preview};
+use crate::daemon::pipeline::{
     format_api_error, format_no_microphone_error, save_history_entry, transcribe_batch_audio,
     BatchOptions,
 };
-use crate::selection::{acquire_selected_text, capture_selection};
+use crate::daemon::selection::{acquire_selected_text, capture_selection};
 
 /// History `backend` tag for a command-mode result, alongside the `llm:<name>`
 /// tags the `[[llm_commands]]` path writes.
@@ -656,7 +656,7 @@ pub(crate) async fn handle_set_llm_instruction(
 /// config, update the matching entry, write it back. Best-effort — the
 /// in-memory override already applies to the running daemon.
 fn persist_llm_instruction(name: &str, instruction: &str) -> anyhow::Result<()> {
-    let path = whisrs::config_path();
+    let path = crate::config_path();
     let contents = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read config at {}", path.display()))?;
     let mut config: Config =
@@ -667,7 +667,7 @@ fn persist_llm_instruction(name: &str, instruction: &str) -> anyhow::Result<()> 
         .find(|e| e.name == name)
         .ok_or_else(|| anyhow::anyhow!("entry '{name}' not present in config file"))?;
     entry.instruction = instruction.to_string();
-    whisrs::config::setup::write_config(&config)?;
+    crate::config::setup::write_config(&config)?;
     Ok(())
 }
 
@@ -1016,7 +1016,7 @@ async fn llm_command_background_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::selection::CaptureError;
+    use crate::daemon::selection::CaptureError;
 
     fn recording_machine() -> StateMachine {
         let mut sm = StateMachine::new();
@@ -1358,7 +1358,7 @@ mod tests {
         // clear — the two steps handle_toggle's stop arm runs under one
         // lock.
         ds.state_machine.transition(Action::Toggle).unwrap();
-        crate::dictation::discard_command_sessions(&mut ds, "toggle-stop");
+        crate::daemon::dictation::discard_command_sessions(&mut ds, "toggle-stop");
 
         assert!(
             ds.command_mode.is_none(),

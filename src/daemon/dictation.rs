@@ -4,14 +4,14 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use whisrs::audio::capture::AudioCaptureHandle;
-use whisrs::audio::feedback;
-use whisrs::state::Action;
-use whisrs::{validate_language_override, Response, State};
+use crate::audio::capture::AudioCaptureHandle;
+use crate::audio::feedback;
+use crate::state::Action;
+use crate::{validate_language_override, Response, State};
 
-use crate::context::{DaemonContext, DaemonState};
-use crate::notify::{send_notification, truncate_preview};
-use crate::pipeline::{
+use crate::daemon::context::{DaemonContext, DaemonState};
+use crate::daemon::notify::{send_notification, truncate_preview};
+use crate::daemon::pipeline::{
     build_transcription_config, format_no_microphone_error, history_backend_tag,
     process_recording_batch, run_streaming_pipeline, save_history_entry, DictationOutcome,
     StreamingPipelineParams,
@@ -471,7 +471,7 @@ fn validate_toggle_language(language: Option<String>) -> Result<Option<String>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use whisrs::Config;
+    use crate::Config;
 
     #[test]
     fn resolve_language_prefers_override() {
@@ -584,7 +584,7 @@ mod tests {
     /// field, leaving the machine in Idle.
     #[test]
     fn cancel_discards_command_and_llm_command_sessions() {
-        use crate::context::{CommandModeContext, LlmCommandContext};
+        use crate::daemon::context::{CommandModeContext, LlmCommandContext};
 
         let mut ds = DaemonState::new();
         ds.state_machine.transition(Action::Toggle).unwrap(); // → Recording

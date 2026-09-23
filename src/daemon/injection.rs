@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
-use whisrs::llm;
-use whisrs::InjectorBackend;
+use crate::llm;
+use crate::InjectorBackend;
 use xkb_type::ClipboardBackend;
 
 static KEYBOARD: OnceLock<StdMutex<Option<Box<dyn xkb_type::KeyInjector>>>> = OnceLock::new();
@@ -236,7 +236,7 @@ pub(crate) fn clear_line_via_keyboard(
 /// `paste = true` it sets the clipboard, sends Ctrl+V (Ctrl+Shift+V for
 /// terminals), then restores the previous clipboard — layout-independent
 /// injection for compositors that lack the Wayland virtual-keyboard protocol
-/// (see [`whisrs::InputConfig::paste`]). Runs in a blocking context (callers
+/// (see [`crate::InputConfig::paste`]). Runs in a blocking context (callers
 /// wrap it in `spawn_blocking`), so the sleeps/restore use std threads.
 ///
 /// `ClipboardBackend` is text-only, so a clipboard holding non-text content
@@ -253,7 +253,7 @@ pub(crate) fn clear_line_via_keyboard(
 /// race that copy and discard it.
 ///
 /// With `clipboard_fallback` (see
-/// [`whisrs::InputConfig::clipboard_fallback`]) the final text is left in
+/// [`crate::InputConfig::clipboard_fallback`]) the final text is left in
 /// the clipboard as a manual-fix fallback for silent injection failures:
 /// in typing mode it is copied after the keystrokes run, success or failure
 /// (a `warn!` on copy error, never a change to the returned `Result`); in
@@ -264,7 +264,7 @@ pub(crate) fn clear_line_via_keyboard(
 /// happens on that degraded path.
 ///
 /// With `clipboard_only` (see
-/// [`whisrs::InputConfig::clipboard_only`]) the text is never injected at
+/// [`crate::InputConfig::clipboard_only`]) the text is never injected at
 /// all: it is written to the clipboard and the function returns. That mode
 /// wins over `paste` and `clipboard_fallback` (both become no-ops), and a
 /// copy failure is a hard error — the copy is the entire feature, there is
@@ -1223,11 +1223,11 @@ mod tests {
     /// hands to `is_terminal_class`.
     #[test]
     fn terminal_classes_parses_from_the_input_table() {
-        let old: whisrs::InputConfig = toml::from_str("key_delay_ms = 2\npaste = true\n").unwrap();
+        let old: crate::InputConfig = toml::from_str("key_delay_ms = 2\npaste = true\n").unwrap();
         assert!(old.terminal_classes.is_empty());
         assert!(!is_terminal_class("Alacritty-float", &old.terminal_classes));
 
-        let new: whisrs::InputConfig =
+        let new: crate::InputConfig =
             toml::from_str("terminal_classes = [\"Alacritty-float\", \"st-mytermname\"]\n")
                 .unwrap();
         assert_eq!(new.terminal_classes, ["Alacritty-float", "st-mytermname"]);
