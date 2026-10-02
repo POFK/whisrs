@@ -732,6 +732,11 @@ pub struct WaylandVkKeyboard {
     conn: Connection,
     queue: wayland_client::EventQueue<State>,
     qh: QueueHandle<State>,
+    /// Kept so the virtual keyboard can be recreated before every keymap
+    /// upload; see [`Self::recreate_vk`].
+    seat: WlSeat,
+    /// Kept so the virtual keyboard can be recreated before every keymap upload.
+    manager: ZwpVirtualKeyboardManagerV1,
     vk: ZwpVirtualKeyboardV1,
     /// Resolved key (keycode + level/modifier) for every character currently
     /// typeable against the uploaded keymap. Always contains the full permanent
@@ -797,12 +802,71 @@ impl WaylandVkKeyboard {
             queue,
             qh,
             vk,
+            seat,
+            manager,
             char_to_key: HashMap::new(),
             ordered_chars: Vec::new(),
             keymap_uploaded: false,
             key_delay,
             time: 0,
         })
+    }
+
+    /// Destroy the current `zwp_virtual_keyboard_v1` and create a fresh one.
+    ///
+    /// # Why a keymap upload must do this (Hyprland gates the re-broadcast)
+    ///
+    /// Hyprland forwards a `keymap` request to clients *only* while the keyboard
+    /// that sent it is the seat's **active** keyboard. `CInputManager::setupKeyboard`
+    /// installs the handler as
+    ///
+    /// ```text
+    /// if (PKEEB == g_pSeatManager->m_keyboard) {
+    ///     g_pSeatManager->updateActiveKeyboardData();   // → PROTO::seat->updateKeymap()
+    ///     g_pKeybindManager->m_keyToCodeCache.clear();
+    /// }
+    /// ```
+    ///
+    /// and `updateActiveKeyboardData()` is the only thing that re-broadcasts
+    /// `wl_keyboard.keymap` to the seat's clients. `CSeatManager::setKeyboard`
+    /// re-assigns that active keyboard on exactly two occasions: when *any*
+    /// keyboard is created, and when a key or modifier event reaches the seat
+    /// from a keyboard.
+    ///
+    /// So our **first** upload is forwarded (the client ends up with keymap #1),
+    /// but as soon as another virtual keyboard on the same seat re-asserts itself
+    /// — a running fcitx5 keeps `hl-virtual-keyboard-fcitx5` on the seat and emits
+    /// its own key/modifier events in response to the text we inject — we are no
+    /// longer the active keyboard, and **every later keymap upload is dropped at
+    /// the client boundary**. The compositor updates its own internal state, yet no
+    /// client ever receives the new keymap, so glyphs introduced by later batches
+    /// keep decoding against the stale first keymap and come out as *earlier*
+    /// glyphs (the observed screen degeneration). Pure-ASCII text is immune
+    /// because ASCII is permanent in every keymap and never triggers an upload.
+    ///
+    /// Re-creating the object is the only client-side action that forces the
+    /// compositor to make us the active keyboard again, since `setupKeyboard()`
+    /// ends with `g_pSeatManager->setKeyboard(keeb)`. The new object is created
+    /// *before* the old one is destroyed so the seat is never left without our
+    /// keyboard: Hyprland appends new keyboards to the end of its list, so
+    /// destroying the old object re-selects the new one, and
+    /// `CSeatManager::setKeyboard` short-circuits when the target is unchanged,
+    /// leaving this keyboard active for the keymap request that follows.
+    fn recreate_vk(&mut self) -> anyhow::Result<()> {
+        let new_vk = self.manager.create_virtual_keyboard(&self.seat, &self.qh, ());
+        let old_vk = std::mem::replace(&mut self.vk, new_vk);
+        old_vk.destroy();
+        self.conn
+            .flush()
+            .context("flush after virtual-keyboard recreation")?;
+
+        let mut state = State;
+        self.queue
+            .roundtrip(&mut state)
+            .context("roundtrip after virtual-keyboard recreation")?;
+
+        debug!("wayland-vk virtual keyboard recreated for a keymap upload");
+        Ok(())
     }
 
     /// Build the keymap for the accumulated non-ASCII `chars`, upload it to the
@@ -824,7 +888,19 @@ impl WaylandVkKeyboard {
     /// genuinely new non-ASCII glyph first appears — rare — so the settle cost
     /// is paid almost never, while pure-ASCII / known-glyph streaming never
     /// re-uploads at all.
+    ///
+    /// The keyboard object itself is recreated before the upload — see
+    /// [`Self::recreate_vk`]. Without that step a compositor which gates the
+    /// keymap re-broadcast on "the changing keyboard is the active keyboard"
+    /// (Hyprland) accepts this upload and then forwards it to nobody, leaving
+    /// every client decoding against the previous keymap.
     fn upload_keymap(&mut self, chars: &[char]) -> anyhow::Result<()> {
+        // Recreate the keyboard first: a compositor that only re-broadcasts the
+        // keymap while we are its active keyboard (Hyprland) would otherwise
+        // swallow this upload, leaving clients on the previous keymap. See
+        // `recreate_vk` for the full mechanism.
+        self.recreate_vk()?;
+
         let (keymap_str, map) = build_keymap_string(chars);
 
         // Write the keymap (NUL-terminated, as XKB expects) to an fd. Prefer a
